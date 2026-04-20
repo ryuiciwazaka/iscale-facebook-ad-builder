@@ -134,10 +134,65 @@ export default function ImageAds() {
     const handleGenerate = async () => {
         setGenerating(true);
         try {
+            // Pull winning-creative signals for the current account (SHEROE by default).
+            // Priority: sessionStorage.winningSeed (from Reporting "Bu kalıpla üret")
+            //           → /winning-creatives/live → /winning-creatives/segments.
+            const seededRaw = sessionStorage.getItem('winningSeed');
+            sessionStorage.removeItem('winningSeed');
+            const seeded = seededRaw ? JSON.parse(seededRaw) : null;
+
+            let signals = {
+                winningAds: seeded?.winningAds || null,
+                patternProfile: seeded?.patternProfile || null,
+                audienceSignals: null,
+            };
+            try {
+                const accR = await authFetch(`${API_URL}/facebook/accounts`);
+                if (accR.ok) {
+                    const accs = await accR.json();
+                    const preferred = accs.find(a => /sheroe/i.test(a.name)) || accs[0];
+                    if (preferred?.id) {
+                        const qs = `ad_account_id=${encodeURIComponent(preferred.id)}&date_preset=last_30d&min_spend=50&top_n=5`;
+                        const [liveR, segR] = await Promise.all([
+                            authFetch(`${API_URL}/winning-creatives/live?${qs}`),
+                            authFetch(`${API_URL}/winning-creatives/segments?ad_account_id=${encodeURIComponent(preferred.id)}&date_preset=last_30d`),
+                        ]);
+                        if (liveR.ok) {
+                            const live = await liveR.json();
+                            if (!signals.winningAds && live?.ads?.length) {
+                                signals.winningAds = live.ads.slice(0, 5).map(a => ({
+                                    body: a.creative?.body, title: a.creative?.title,
+                                    cta: a.creative?.cta_type, roas: a.kpis?.roas, ctr: a.kpis?.ctr,
+                                }));
+                            }
+                            if (!signals.patternProfile) signals.patternProfile = live?.pattern_profile || null;
+                        }
+                        if (segR.ok) {
+                            const seg = await segR.json();
+                            const ag = seg?.best?.age_gender?.segment;
+                            const pl = seg?.best?.placement?.segment;
+                            signals.audienceSignals = {
+                                top_segment: ag ? Object.values(ag).filter(Boolean).join(' ') : null,
+                                top_placement: pl ? Object.values(pl).filter(Boolean).join(' / ') : null,
+                            };
+                        }
+                    }
+                }
+            } catch (sigErr) {
+                console.warn('Winning signals fetch failed, proceeding without:', sigErr);
+            }
+
+            const body = {
+                ...wizardData,
+                ...(signals.winningAds ? { winningAds: signals.winningAds } : {}),
+                ...(signals.patternProfile ? { patternProfile: signals.patternProfile } : {}),
+                ...(signals.audienceSignals ? { audienceSignals: signals.audienceSignals } : {}),
+            };
+
             const response = await authFetch(`${API_URL}/copy-generation/generate`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(wizardData)
+                body: JSON.stringify(body)
             });
 
             if (!response.ok) {

@@ -20,6 +20,11 @@ class CopyGenerationRequest(BaseModel):
     variationCount: int = 3
     campaignDetails: Dict[str, str]
     customPrompt: Optional[str] = None
+    # Optional performance feedback loop signals — populated by frontend from
+    # /api/v1/winning-creatives/* endpoints. When present, prompt is enriched.
+    winningAds: Optional[List[Dict[str, Any]]] = None
+    audienceSignals: Optional[Dict[str, Any]] = None
+    patternProfile: Optional[Dict[str, Any]] = None
 
 class FieldRegenerationRequest(BaseModel):
     field: str
@@ -29,6 +34,76 @@ class FieldRegenerationRequest(BaseModel):
     profile: Dict[str, Any]
     template: Optional[Dict[str, Any]] = None
     campaignDetails: Dict[str, str]
+
+
+def _build_signals_block(request: CopyGenerationRequest) -> str:
+    """Build a PERFORMANS SİNYALLERİ block from winningAds/patternProfile/audienceSignals.
+
+    Returns empty string if no signals provided. Keeps prompt backwards-compatible.
+    """
+    winners = request.winningAds or []
+    profile = request.patternProfile or {}
+    audience = request.audienceSignals or {}
+    if not winners and not profile and not audience:
+        return ""
+
+    lines = ["\nPERFORMANS SİNYALLERİ (marka son 30 gün):"]
+    if audience:
+        top_seg = audience.get("top_segment")
+        top_pl = audience.get("top_placement")
+        if top_seg or top_pl:
+            parts = []
+            if top_seg:
+                parts.append(f"kitle {top_seg}")
+            if top_pl:
+                parts.append(f"placement {top_pl}")
+            lines.append("- En yüksek ROAS: " + " / ".join(parts))
+        if audience.get("fatigue_note"):
+            lines.append(f"- Uyarı: {audience['fatigue_note']}")
+
+    body_p = (profile.get("body") or {}) if profile else {}
+    if body_p:
+        awc = body_p.get("avg_word_count")
+        acc = body_p.get("avg_char_count")
+        if awc or acc:
+            lines.append(f"- Kazanan ortalama uzunluk: {awc} kelime / {acc} karakter")
+    if profile.get("emoji_rate_pct") is not None:
+        lines.append(f"- Emoji yoğunluğu: %{profile['emoji_rate_pct']}")
+    if profile.get("hook_types"):
+        lines.append(f"- Güçlü hook tipleri: {profile['hook_types']}")
+    if profile.get("cta_mix"):
+        lines.append(f"- CTA dağılımı: {profile['cta_mix']}")
+    if profile.get("power_words_present"):
+        lines.append(f"- Etkili güç kelimeler: {list(profile['power_words_present'].keys())}")
+
+    if winners:
+        lines.append("\nGERÇEK KAZANAN ÖRNEKLER (ROAS sırasıyla):")
+        for i, w in enumerate(winners[:5], 1):
+            body = (w.get("body") or "").replace("\n", " ").strip()[:180]
+            roas = w.get("roas")
+            ctr = w.get("ctr")
+            metric = []
+            if roas is not None:
+                try:
+                    metric.append(f"ROAS {float(roas):.2f}x")
+                except (TypeError, ValueError):
+                    pass
+            if ctr is not None:
+                try:
+                    metric.append(f"CTR %{float(ctr):.2f}")
+                except (TypeError, ValueError):
+                    pass
+            suffix = f" — {', '.join(metric)}" if metric else ""
+            lines.append(f'{i}. "{body}"{suffix}')
+
+    lang = (profile.get("language") or "tr") if profile else "tr"
+    lines.append(
+        "\nZORUNLU KURAL: Yeni varyantlar bu kalıpları devralsın. Kelime sayısı "
+        "yukarıdaki ortalamadan ±%20 içinde kalsın, aynı CTA ailesinden birini "
+        f"kullansın, hook tipini taklit etsin. Kopyalama, stilini devral. Dil: {lang}.\n"
+    )
+    return "\n".join(lines)
+
 
 @router.post("/generate")
 async def generate_copy(request: CopyGenerationRequest):
@@ -99,7 +174,13 @@ Return ONLY valid JSON in this exact format:
         # Use custom prompt if provided
         if request.customPrompt:
             prompt = request.customPrompt
-        
+        else:
+            signals_block = _build_signals_block(request)
+            if signals_block:
+                # Insert performance signals before INSTRUCTIONS: block so Gemini
+                # treats them as constraints on the rest of the prompt.
+                prompt = prompt.replace("INSTRUCTIONS:", signals_block + "\nINSTRUCTIONS:", 1)
+
         # Generate with Gemini
         model = genai.GenerativeModel('gemini-flash-latest')
         response = model.generate_content(prompt)

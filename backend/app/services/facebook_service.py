@@ -137,6 +137,94 @@ class FacebookService:
             print(f"Error fetching insights: {e}")
             raise
 
+    def get_ad_creative(self, ad_id):
+        """Fetch an ad's creative (body, title, image_url, video_id, CTA).
+
+        Returns a dict with keys: body, title, image_url, video_id, cta_type, link_url.
+        All optional — missing values are None.
+        """
+        if not self.api:
+            self.initialize()
+        try:
+            ad = Ad(ad_id, api=self.api)
+            ad_obj = ad.api_get(fields=[
+                'creative{body,title,image_url,video_id,thumbnail_url,'
+                'call_to_action_type,object_story_spec,effective_object_story_id,'
+                'link_url,asset_feed_spec}'
+            ])
+            creative = ad_obj.get('creative') or {}
+            # Dig into object_story_spec for link_data / video_data if top-level is empty
+            oss = creative.get('object_story_spec') or {}
+            link_data = oss.get('link_data') or {}
+            video_data = oss.get('video_data') or {}
+            body = creative.get('body') or link_data.get('message') or video_data.get('message')
+            title = creative.get('title') or link_data.get('name') or video_data.get('title')
+            image_url = creative.get('image_url') or link_data.get('picture') or creative.get('thumbnail_url')
+            video_id = creative.get('video_id') or video_data.get('video_id')
+            cta = (creative.get('call_to_action_type')
+                   or (link_data.get('call_to_action') or {}).get('type')
+                   or (video_data.get('call_to_action') or {}).get('type'))
+            link_url = creative.get('link_url') or link_data.get('link')
+            return {
+                'body': body,
+                'title': title,
+                'image_url': image_url,
+                'video_id': video_id,
+                'cta_type': cta,
+                'link_url': link_url,
+            }
+        except Exception as e:
+            print(f"Error fetching creative for ad {ad_id}: {e}")
+            return {'body': None, 'title': None, 'image_url': None,
+                    'video_id': None, 'cta_type': None, 'link_url': None}
+
+    def get_ad_level_insights(self, ad_account_id=None, date_preset='last_30d',
+                              breakdowns=None, min_spend=0.0):
+        """Ad-level insights with optional breakdowns and min spend filter.
+
+        breakdowns: list like ['age','gender'] or ['publisher_platform','platform_position']
+        min_spend: drop rows below this spend.
+        """
+        breakdown_param = ','.join(breakdowns) if breakdowns else None
+        rows = self.get_insights(
+            ad_account_id=ad_account_id,
+            level='ad',
+            date_preset=date_preset,
+            breakdown=breakdown_param,
+        )
+        if min_spend and min_spend > 0:
+            rows = [r for r in rows if float(r.get('spend', 0) or 0) >= float(min_spend)]
+        return rows
+
+    def get_ad_timeseries(self, ad_id, last_days=14):
+        """Daily insights (CTR/freq/CPM/ROAS components) for a single ad over last_days."""
+        if not self.api:
+            self.initialize()
+        preset_map = {7: 'last_7d', 14: 'last_14d', 30: 'last_30d', 90: 'last_90d'}
+        date_preset = preset_map.get(last_days, 'last_14d')
+        try:
+            ad = Ad(ad_id, api=self.api)
+            insights = ad.get_insights(
+                fields=[
+                    'spend', 'impressions', 'reach', 'frequency',
+                    'clicks', 'ctr', 'cpm', 'cpc',
+                    'actions', 'action_values',
+                    'date_start', 'date_stop',
+                ],
+                params={'time_increment': 1, 'date_preset': date_preset},
+            )
+            out = []
+            for row in insights:
+                d = dict(row)
+                for key in ('actions', 'action_values'):
+                    if key in d and d[key] is not None:
+                        d[key] = [dict(x) for x in d[key]]
+                out.append(d)
+            return out
+        except Exception as e:
+            print(f"Error fetching timeseries for ad {ad_id}: {e}")
+            return []
+
     def get_campaigns(self, ad_account_id=None):
         """Fetch all campaigns from the ad account."""
         account = self._get_account(ad_account_id)
