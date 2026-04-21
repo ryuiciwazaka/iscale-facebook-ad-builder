@@ -797,7 +797,23 @@ class FacebookService:
         link_data = oss.get('link_data') or {}
         video_data = oss.get('video_data') or {}
 
+        # page_id: primary → object_story_spec → creative field → parse from
+        # effective_object_story_id ("<page_id>_<post_id>") → first page of account
         page_id = oss.get('page_id') or creative.get('page_id')
+        if not page_id:
+            eosi = creative.get('effective_object_story_id') or ''
+            if '_' in eosi:
+                page_id = eosi.split('_', 1)[0]
+        if not page_id:
+            try:
+                me = User(fbid='me', api=self.api)
+                pages = me.get_accounts(fields=['id', 'name'])
+                if pages:
+                    page_id = pages[0].get('id')
+                    print(f"duplicate_ad: falling back to first page {page_id}")
+            except Exception as e:
+                print(f"duplicate_ad: page lookup fallback failed: {e}")
+
         instagram_actor_id = oss.get('instagram_actor_id')
         video_id = creative.get('video_id') or video_data.get('video_id')
         image_hash = creative.get('image_hash') or link_data.get('image_hash')
@@ -809,7 +825,11 @@ class FacebookService:
                or 'LEARN_MORE')
 
         if not page_id:
-            raise ValueError("Source creative has no page_id — cannot clone")
+            raise ValueError("Source creative has no page_id and no page fallback — cannot clone")
+        # Default landing to SHEROE site if original had no link (common for
+        # promoted organic posts that only deep-link to the Instagram profile).
+        if not link:
+            link = 'https://sheroe.com.tr'
 
         creative_data = {
             'name': f"{src.get('name', 'Ad')} — AB creative",
