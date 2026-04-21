@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useBrands } from '../context/BrandContext';
 import ProductForm from '../components/ProductForm';
-import { Plus, Edit2, Trash2, Package, LayoutGrid, List, Search } from 'lucide-react';
+import { Plus, Edit2, Trash2, Package, LayoutGrid, List, Search, Sparkles } from 'lucide-react';
 import ConfirmationModal from '../components/ConfirmationModal';
+import AdStrategyDrawer from '../components/AdStrategyDrawer';
 
 const Products = () => {
     const { brands, addProduct, updateProduct, deleteProduct } = useBrands();
@@ -17,6 +18,7 @@ const Products = () => {
     const [searchTerm, setSearchTerm] = useState('');
 
     const [productToDelete, setProductToDelete] = useState(null);
+    const [strategyProduct, setStrategyProduct] = useState(null);
 
     // Flatten products from all brands
     const allProducts = brands.flatMap(brand =>
@@ -144,6 +146,13 @@ const Products = () => {
                                             <h3 className="text-lg font-bold text-gray-900">{product.name}</h3>
                                             <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                                 <button
+                                                    onClick={(e) => { e.stopPropagation(); setStrategyProduct(product); }}
+                                                    title="Reklam Stratejisi Öner"
+                                                    className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg"
+                                                >
+                                                    <Sparkles size={16} />
+                                                </button>
+                                                <button
                                                     onClick={(e) => { e.stopPropagation(); handleEdit(product); }}
                                                     className="p-1.5 text-gray-500 hover:bg-gray-100 rounded-lg"
                                                 >
@@ -202,6 +211,13 @@ const Products = () => {
                                             <td className="px-6 py-4 text-right">
                                                 <div className="flex justify-end gap-2">
                                                     <button
+                                                        onClick={(e) => { e.stopPropagation(); setStrategyProduct(product); }}
+                                                        className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                                                        title="Reklam Stratejisi Öner"
+                                                    >
+                                                        <Sparkles size={16} />
+                                                    </button>
+                                                    <button
                                                         onClick={(e) => { e.stopPropagation(); handleEdit(product); }}
                                                         className="p-1.5 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
                                                         title="Edit"
@@ -242,6 +258,12 @@ const Products = () => {
                 message="Are you sure you want to delete this product? This action cannot be undone."
                 confirmText="Delete"
                 isDestructive={true}
+            />
+
+            <AdStrategyDrawer
+                product={strategyProduct}
+                open={!!strategyProduct}
+                onClose={() => setStrategyProduct(null)}
             />
         </div>
     );
