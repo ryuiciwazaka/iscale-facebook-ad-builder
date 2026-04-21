@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from typing import Dict, Any, Optional
 from app.services.facebook_service import FacebookService
 from app.models import FacebookAd, FacebookAdSet, FacebookCampaign, User
@@ -141,6 +142,211 @@ def read_ads(
     try:
         ads = service.get_ads(adset_id)
         return [dict(a) for a in ads]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ads/{ad_id}/full")
+def read_ad_full(
+    ad_id: str,
+    service: FacebookService = Depends(get_facebook_service),
+    current_user: User = Depends(get_current_active_user),
+):
+    try:
+        return service.get_ad_full(ad_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AdUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    status: Optional[str] = None  # ACTIVE | PAUSED
+
+
+@router.patch("/ads/{ad_id}")
+def patch_ad(
+    ad_id: str,
+    request: AdUpdateRequest,
+    service: FacebookService = Depends(get_facebook_service),
+    current_user: User = Depends(get_current_active_user),
+):
+    try:
+        return service.update_ad(ad_id, request.dict(exclude_none=True))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AdSetUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    status: Optional[str] = None
+    daily_budget_try: Optional[float] = None  # TL — converted to kuruş internally
+    lifetime_budget_try: Optional[float] = None
+
+
+@router.patch("/adsets/{adset_id}")
+def patch_adset(
+    adset_id: str,
+    request: AdSetUpdateRequest,
+    service: FacebookService = Depends(get_facebook_service),
+    current_user: User = Depends(get_current_active_user),
+):
+    fields: Dict[str, Any] = {}
+    if request.name:
+        fields['name'] = request.name
+    if request.status:
+        fields['status'] = request.status
+    if request.daily_budget_try is not None:
+        fields['daily_budget'] = int(round(request.daily_budget_try * 100))
+    if request.lifetime_budget_try is not None:
+        fields['lifetime_budget'] = int(round(request.lifetime_budget_try * 100))
+    try:
+        return service.update_adset(adset_id, fields)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ads/{ad_id}/diagnose")
+async def diagnose_ad(
+    ad_id: str,
+    date_preset: str = "last_30d",
+    service: FacebookService = Depends(get_facebook_service),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Analyze a live ad's creative + performance, return diagnosis + 3 improved
+    copy variants that keep the same media. Used by the 'İyileştir & Kopyala' UI.
+    """
+    import os, json as _json, re as _re
+    import google.generativeai as genai
+    try:
+        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("VITE_GEMINI_API_KEY")
+        if not GEMINI_API_KEY:
+            raise HTTPException(status_code=500, detail="Gemini API key not configured")
+        genai.configure(api_key=GEMINI_API_KEY)
+
+        src = service.get_ad_full(ad_id)
+        creative = src.get('creative') or {}
+        oss = creative.get('object_story_spec') or {}
+        link_data = oss.get('link_data') or {}
+        video_data = oss.get('video_data') or {}
+        body = creative.get('body') or link_data.get('message') or video_data.get('message') or ''
+        title = creative.get('title') or link_data.get('name') or video_data.get('title') or ''
+        cta = (creative.get('call_to_action_type')
+               or (link_data.get('call_to_action') or {}).get('type')
+               or (video_data.get('call_to_action') or {}).get('type') or '')
+
+        ts = service.get_ad_timeseries(ad_id, last_days=14)
+        spend_total = sum(float(r.get('spend') or 0) for r in ts)
+        impr_total = sum(float(r.get('impressions') or 0) for r in ts)
+        clicks_total = sum(float(r.get('clicks') or 0) for r in ts)
+
+        def _pick(arr, t):
+            if not arr:
+                return 0.0
+            for a in arr:
+                if a.get('action_type') == t:
+                    try:
+                        return float(a.get('value') or 0)
+                    except (TypeError, ValueError):
+                        return 0.0
+            return 0.0
+        purchases = sum(_pick(r.get('actions'), 'omni_purchase') or _pick(r.get('actions'), 'purchase') for r in ts)
+        pvalue = sum(_pick(r.get('action_values'), 'omni_purchase') or _pick(r.get('action_values'), 'purchase') for r in ts)
+        ctr = (clicks_total / impr_total * 100) if impr_total else 0
+        roas = (pvalue / spend_total) if spend_total else 0
+
+        prompt = f"""You are a senior direct-response Turkish ad copywriter auditing a
+SHEROE (Turkish women's boutique) Facebook ad and proposing 3 improved versions.
+
+MEVCUT REKLAM (14 günlük performans):
+- Başlık: {title!r}
+- Metin: {body!r}
+- CTA: {cta!r}
+- Harcama: {spend_total:.0f} TL
+- Gösterim: {int(impr_total)}
+- CTR: {ctr:.2f}%
+- Satın alma: {int(purchases)}
+- ROAS: {roas:.2f}x
+
+GÖREV:
+1) "diagnosis" — metnin spesifik zayıflıklarını 2-4 maddeyle Türkçe yaz.
+   Örn: "body çok uzun (X karakter, ideal 80-125)", "CTA aksiyon odaklı değil",
+   "hook merak uyandırmıyor — ürün özellik listesi gibi", "price/offer hook yok".
+2) "variants" — 3 iyileştirilmiş kopya. Hepsi Türkçe. Her biri farklı strateji:
+   V1: Kısa merak hook'u (Havoş-style), emoji 1-2, body <100 karakter.
+   V2: Price/offer vurgulu (Trendyol Milla-style), indirim kodu hint.
+   V3: Problem-solution, customer voice. Body <150 karakter.
+Aynı ürünü satıyor — içeriği/öneriyi yeniden uydurma, mevcut mesajı yeniden yaz.
+
+Return ONLY valid JSON:
+{{
+  "diagnosis": ["...","..."],
+  "variants": [
+    {{"strategy":"curiosity-hook","title":"...","body":"...","cta":"SHOP_NOW"}},
+    {{"strategy":"offer-led","title":"...","body":"...","cta":"ORDER_NOW"}},
+    {{"strategy":"problem-solution","title":"...","body":"...","cta":"LEARN_MORE"}}
+  ]
+}}"""
+        model = genai.GenerativeModel('gemini-flash-latest')
+        resp = model.generate_content(prompt)
+        text = (resp.text or '').strip()
+        text = _re.sub(r'^```(?:json)?\s*', '', text)
+        text = _re.sub(r'\s*```$', '', text)
+        parsed = _json.loads(text)
+        return {
+            'source': {
+                'ad_id': ad_id, 'name': src.get('name'), 'title': title, 'body': body, 'cta': cta,
+                'kpis': {'spend': spend_total, 'impressions': int(impr_total),
+                         'clicks': int(clicks_total), 'ctr': ctr, 'purchases': int(purchases),
+                         'roas': roas},
+            },
+            'diagnosis': parsed.get('diagnosis') or [],
+            'variants': parsed.get('variants') or [],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DuplicateAdRequest(BaseModel):
+    body: str
+    title: Optional[str] = None
+    cta: Optional[str] = None
+    link_url: Optional[str] = None
+    name_suffix: str = "[AB-AI]"
+    status: str = "PAUSED"
+    ad_account_id: Optional[str] = None
+
+
+@router.post("/ads/{ad_id}/duplicate")
+def duplicate_ad(
+    ad_id: str,
+    request: DuplicateAdRequest,
+    service: FacebookService = Depends(get_facebook_service),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Clone a live ad reusing its media (video/image) with new copy, for A/B test.
+    New ad is created PAUSED by default; enable it in Ads Manager to start the test.
+    """
+    try:
+        return service.duplicate_ad_with_new_copy(
+            source_ad_id=ad_id,
+            new_copy={
+                'body': request.body,
+                'title': request.title,
+                'cta': request.cta,
+                'link_url': request.link_url,
+            },
+            ad_account_id=request.ad_account_id,
+            name_suffix=request.name_suffix,
+            status=request.status,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

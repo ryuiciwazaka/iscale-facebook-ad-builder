@@ -3,7 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import {
     BarChart, Download, DollarSign, Eye, MousePointer, TrendingUp,
     Target, AlertCircle, HelpCircle, Sparkles, Zap, Flame, X,
+    Pencil, Wand2,
 } from 'lucide-react';
+import { AdEditDrawer, AdImproveDrawer } from '../components/AdActionsDrawer';
 
 const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1');
 
@@ -259,6 +261,8 @@ const WinnersTab = ({ accountId, datePreset, currency }) => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [fatigue, setFatigue] = useState([]);
+    const [editing, setEditing] = useState(null);
+    const [improving, setImproving] = useState(null);
 
     useEffect(() => {
         if (!accountId) return;
@@ -383,14 +387,24 @@ const WinnersTab = ({ accountId, datePreset, currency }) => {
                                         </span>
                                     )}
                                 </div>
-                                <button onClick={() => useThisPattern(ad)} className="w-full bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold py-2 rounded-lg flex items-center justify-center gap-2">
+                                <button onClick={() => useThisPattern(ad)} className="w-full bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold py-2 rounded-lg flex items-center justify-center gap-2 mb-2">
                                     <Sparkles size={14} /> Bu kalıpla üret
                                 </button>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button onClick={() => setEditing(ad)} className="text-xs border border-gray-300 text-gray-700 hover:bg-gray-50 py-1.5 rounded-lg flex items-center justify-center gap-1">
+                                        <Pencil size={12} /> Düzenle
+                                    </button>
+                                    <button onClick={() => setImproving(ad)} className="text-xs border border-amber-300 text-amber-700 hover:bg-amber-50 py-1.5 rounded-lg flex items-center justify-center gap-1">
+                                        <Wand2 size={12} /> İyileştir & Kopyala
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     );
                 })}
             </div>
+            <AdEditDrawer ad={editing} open={!!editing} onClose={() => setEditing(null)} />
+            <AdImproveDrawer ad={improving} open={!!improving} onClose={() => setImproving(null)} />
         </>
     );
 };

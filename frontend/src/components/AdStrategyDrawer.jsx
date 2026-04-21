@@ -105,6 +105,28 @@ const AdStrategyDrawer = ({ product, open, onClose }) => {
 
                     {report && (
                         <div className="space-y-5">
+                            {/* Readiness banner */}
+                            {report.signals && (
+                                <div className={`rounded-xl p-4 border flex items-start gap-3 ${report.signals.ready ? 'bg-green-50 border-green-200 text-green-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+                                    <Sparkles size={20} className="flex-shrink-0 mt-0.5" />
+                                    <div className="flex-1 text-sm">
+                                        <div className="font-semibold mb-1">
+                                            {report.signals.ready ? 'Tam veri — sistem hazır' : 'Kısmi veri — öneriler sınırlı'}
+                                        </div>
+                                        <div className="flex gap-3 flex-wrap text-xs">
+                                            <span className={`px-2 py-0.5 rounded ${report.signals.vlm_ok ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>VLM {report.signals.vlm_ok ? '✓' : '✗'}</span>
+                                            <span className={`px-2 py-0.5 rounded ${report.signals.pattern_ok ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>Kazanan kalıp {report.signals.pattern_ok ? '✓' : '✗'}</span>
+                                            <span className={`px-2 py-0.5 rounded ${report.signals.segments_ok ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>Segments {report.signals.segments_ok ? '✓' : '✗'}</span>
+                                        </div>
+                                        {(report.signals.messages || []).length > 0 && (
+                                            <ul className="mt-2 text-xs opacity-75 list-disc pl-4">
+                                                {report.signals.messages.map((m, i) => <li key={i}>{m}</li>)}
+                                            </ul>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Visual insight */}
                             <Section Icon={Eye} title="Görsel Analiz (VLM)" tone="blue">
                                 {report.visual_insight?.error ? (

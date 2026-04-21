@@ -204,6 +204,12 @@ class AdStrategyService:
 
         pattern_profile: Dict[str, Any] = {}
         segments: Dict[str, Any] = {}
+        signals = {
+            "vlm_ok": False,
+            "pattern_ok": False,
+            "segments_ok": False,
+            "messages": [],
+        }
         if self._analytics:
             try:
                 live = await self._analytics.build_winning_creatives(
@@ -213,14 +219,27 @@ class AdStrategyService:
                     top_n=5,
                 )
                 pattern_profile = live.get("pattern_profile") or {}
+                if pattern_profile.get("sample_size", 0) > 0:
+                    signals["pattern_ok"] = True
+                else:
+                    signals["messages"].append("Pattern profile boş — yeterli kazanan reklam yok")
             except Exception as e:
+                signals["messages"].append(f"Pattern profile çekilemedi: {e}")
                 print(f"pattern_profile fetch failed: {e}")
             try:
                 segments = self._analytics.compute_segment_roas(
                     ad_account_id=ad_account_id, date_preset="last_30d",
                 )
+                best = (segments or {}).get("best") or {}
+                if best.get("age_gender") or best.get("placement"):
+                    signals["segments_ok"] = True
+                else:
+                    signals["messages"].append("Segments verisi boş döndü")
             except Exception as e:
+                signals["messages"].append(f"Segments çekilemedi: {e}")
                 print(f"segments fetch failed: {e}")
+        else:
+            signals["messages"].append("FB servisi bağlı değil — historical data yok")
 
         # If VLM failed, fall back to product text so strategy still returns something.
         if not vlm or vlm.get("error"):
@@ -234,6 +253,10 @@ class AdStrategyService:
                 "weaknesses": [],
                 "confidence": 0.0,
             }
+        else:
+            signals["vlm_ok"] = True
+
+        signals["ready"] = signals["vlm_ok"] and signals["pattern_ok"] and signals["segments_ok"]
 
         angle = self._choose_angle(vlm, pattern_profile)
         audience = self._build_audience(vlm, segments)
@@ -249,4 +272,5 @@ class AdStrategyService:
             "copy_seeds": copy_seeds,
             "pattern_profile": pattern_profile,
             "best_segments": (segments or {}).get("best"),
+            "signals": signals,
         }

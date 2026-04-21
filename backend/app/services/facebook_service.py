@@ -721,6 +721,142 @@ class FacebookService:
 
         return account.create_ad(params=params)
 
+    # ------------------------------------------------------------------
+    # Edit / duplicate operations
+    # ------------------------------------------------------------------
+    def get_ad_full(self, ad_id):
+        """Fetch full ad record incl. adset_id + creative fields."""
+        if not self.api:
+            self.initialize()
+        ad = Ad(ad_id, api=self.api)
+        data = ad.api_get(fields=[
+            'id', 'name', 'status', 'adset_id', 'campaign_id',
+            'creative{id,body,title,image_url,video_id,thumbnail_url,'
+            'call_to_action_type,object_story_spec,effective_object_story_id,'
+            'image_hash,link_url}',
+        ])
+        return dict(data)
+
+    def update_ad(self, ad_id, fields):
+        """Patch an ad. Accepts {name, status}. Returns updated ad snapshot."""
+        if not self.api:
+            self.initialize()
+        allowed = {}
+        if 'name' in fields and fields['name']:
+            allowed[Ad.Field.name] = fields['name']
+        if 'status' in fields and fields['status']:
+            s = str(fields['status']).upper()
+            if s in ('ACTIVE', 'PAUSED', 'DELETED', 'ARCHIVED'):
+                allowed[Ad.Field.status] = s
+        if not allowed:
+            raise ValueError("No updatable fields provided (allowed: name, status)")
+        ad = Ad(ad_id, api=self.api)
+        ad.api_update(params=allowed)
+        return self.get_ad_full(ad_id)
+
+    def update_adset(self, adset_id, fields):
+        """Patch an adset. Accepts {name, status, daily_budget, lifetime_budget}.
+
+        Budgets are passed in minor units (kuruş for TRY). Caller handles TL→kuruş.
+        """
+        if not self.api:
+            self.initialize()
+        params = {}
+        if 'name' in fields and fields['name']:
+            params[AdSet.Field.name] = fields['name']
+        if 'status' in fields and fields['status']:
+            s = str(fields['status']).upper()
+            if s in ('ACTIVE', 'PAUSED', 'DELETED', 'ARCHIVED'):
+                params[AdSet.Field.status] = s
+        if 'daily_budget' in fields and fields['daily_budget'] is not None:
+            params[AdSet.Field.daily_budget] = int(fields['daily_budget'])
+        if 'lifetime_budget' in fields and fields['lifetime_budget'] is not None:
+            params[AdSet.Field.lifetime_budget] = int(fields['lifetime_budget'])
+        if not params:
+            raise ValueError("No updatable fields provided")
+        adset = AdSet(adset_id, api=self.api)
+        adset.api_update(params=params)
+        updated = adset.api_get(fields=[
+            'id', 'name', 'status', 'daily_budget', 'lifetime_budget', 'campaign_id',
+        ])
+        return dict(updated)
+
+    def duplicate_ad_with_new_copy(self, source_ad_id, new_copy, ad_account_id=None,
+                                   name_suffix='[AB-AI]', status='PAUSED'):
+        """Clone a live ad reusing its media (video_id or image_hash) with new copy.
+
+        new_copy: {body, title, cta, link_url?}
+        Returns {new_ad, new_creative_id, source_ad_id}. New ad defaults to PAUSED
+        so the user can review in Ads Manager before enabling the A/B test.
+        """
+        if not self.api:
+            self.initialize()
+        src = self.get_ad_full(source_ad_id)
+        creative = src.get('creative') or {}
+        oss = creative.get('object_story_spec') or {}
+        link_data = oss.get('link_data') or {}
+        video_data = oss.get('video_data') or {}
+
+        page_id = oss.get('page_id') or creative.get('page_id')
+        instagram_actor_id = oss.get('instagram_actor_id')
+        video_id = creative.get('video_id') or video_data.get('video_id')
+        image_hash = creative.get('image_hash') or link_data.get('image_hash')
+        link = (new_copy.get('link_url') or creative.get('link_url')
+                or link_data.get('link') or video_data.get('link'))
+        cta = (new_copy.get('cta') or creative.get('call_to_action_type')
+               or (link_data.get('call_to_action') or {}).get('type')
+               or (video_data.get('call_to_action') or {}).get('type')
+               or 'LEARN_MORE')
+
+        if not page_id:
+            raise ValueError("Source creative has no page_id — cannot clone")
+
+        creative_data = {
+            'name': f"{src.get('name', 'Ad')} — AB creative",
+            'page_id': page_id,
+            'website_url': link,
+            'primary_text': new_copy.get('body'),
+            'headline': new_copy.get('title'),
+            'cta': cta,
+        }
+        if video_id:
+            creative_data['video_id'] = video_id
+            if video_data.get('image_url'):
+                creative_data['thumbnail_url'] = video_data['image_url']
+        elif image_hash:
+            creative_data['image_hash'] = image_hash
+        else:
+            raise ValueError("Source creative has neither video_id nor image_hash")
+        if instagram_actor_id:
+            creative_data['instagram_actor_id'] = instagram_actor_id
+
+        new_creative = self.create_creative(creative_data, ad_account_id=ad_account_id)
+        new_creative_id = new_creative.get('id') if hasattr(new_creative, 'get') else new_creative['id']
+
+        adset_id = src.get('adset_id')
+        if not adset_id:
+            raise ValueError("Source ad has no adset_id — cannot place new ad")
+
+        base_name = src.get('name') or 'Ad'
+        new_name = f"{base_name} {name_suffix}".strip()
+        ad = self.create_ad(
+            {
+                'name': new_name,
+                'adset_id': adset_id,
+                'creative_id': new_creative_id,
+                'status': status,
+            },
+            ad_account_id=ad_account_id,
+        )
+        ad_dict = dict(ad) if hasattr(ad, '__iter__') else {'id': getattr(ad, 'id', None)}
+        return {
+            'new_ad': ad_dict,
+            'new_creative_id': new_creative_id,
+            'source_ad_id': source_ad_id,
+            'source_name': base_name,
+            'new_name': new_name,
+        }
+
     def search_locations(self, query, location_type='city', limit=10, ad_account_id=None):
         """Search for targeting locations."""
         account = self._get_account(ad_account_id)
