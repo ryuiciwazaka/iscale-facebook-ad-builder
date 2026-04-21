@@ -97,10 +97,13 @@ class AdStrategyService:
     # ------------------------------------------------------------------
     def _choose_angle(self, vlm: Dict[str, Any], pattern_profile: Dict[str, Any]) -> Dict[str, str]:
         """Pick a primary creative angle from visual cues + brand pattern."""
+        vlm = vlm or {}
+        pattern_profile = pattern_profile or {}
         mood = (vlm.get("mood") or "").lower()
-        style = set([s.lower() for s in (vlm.get("style_descriptors") or [])])
-        occasion = (vlm.get("target_archetype") or {}).get("occasion", "").lower()
-        hook_types = pattern_profile.get("hook_types") or {} if pattern_profile else {}
+        style = set([(s or "").lower() for s in (vlm.get("style_descriptors") or [])])
+        archetype = vlm.get("target_archetype") or {}
+        occasion = (archetype.get("occasion") or "").lower()
+        hook_types = pattern_profile.get("hook_types") or {}
 
         # Rule-based angle selection
         if "davet" in occasion or "evening" in style or mood in ("sensual", "confident", "bold"):
@@ -122,7 +125,8 @@ class AdStrategyService:
 
     def _recommend_budget(self, segments: Dict[str, Any]) -> Dict[str, Any]:
         """Starter budget suggestion. Accounts with strong historical ROAS → higher."""
-        best_ag = (segments or {}).get("best", {}).get("age_gender") or {}
+        best = (segments or {}).get("best") or {}
+        best_ag = best.get("age_gender") or {}
         best_roas = float(best_ag.get("roas") or 0)
         if best_roas >= 2.5:
             return {"tier": "scale", "daily_try": 1500,
@@ -134,12 +138,17 @@ class AdStrategyService:
                 "note": "Yeni ürün + kısıtlı ROAS geçmişi. Düşük bütçeyle test et, ROAS>1.5 sonrası ölçekle."}
 
     def _build_audience(self, vlm: Dict[str, Any], segments: Dict[str, Any]) -> Dict[str, Any]:
+        vlm = vlm or {}
+        segments = segments or {}
         archetype = vlm.get("target_archetype") or {}
         vlm_age = archetype.get("age_range")
-        best_ag_seg = (segments or {}).get("best", {}).get("age_gender") or {}
+        best = segments.get("best") or {}
+        best_ag_seg = best.get("age_gender") or {}
+        best_pl_seg = best.get("placement") or {}
+        best_dev_seg = best.get("device") or {}
         best_ag = best_ag_seg.get("segment") or {}
-        best_pl = (segments or {}).get("best", {}).get("placement", {}).get("segment") or {}
-        best_dev = (segments or {}).get("best", {}).get("device", {}).get("segment") or {}
+        best_pl = best_pl_seg.get("segment") or {}
+        best_dev = best_dev_seg.get("segment") or {}
         # Prefer VLM archetype when it lines up with historical winner; else historical winner.
         age = vlm_age or best_ag.get("age") or "25-34"
         gender = best_ag.get("gender") or "female"
