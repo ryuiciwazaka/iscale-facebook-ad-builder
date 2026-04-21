@@ -841,8 +841,14 @@ class FacebookService:
         }
         if video_id:
             creative_data['video_id'] = video_id
-            if video_data.get('image_url'):
-                creative_data['thumbnail_url'] = video_data['image_url']
+            # FB requires a thumbnail (image_url or image_hash) in video_data.
+            # Source provides it either inside object_story_spec.video_data.image_url
+            # or at creative.thumbnail_url (common for promoted organic posts).
+            thumb = (video_data.get('image_url')
+                     or creative.get('thumbnail_url')
+                     or creative.get('image_url'))
+            if thumb:
+                creative_data['thumbnail_url'] = thumb
         elif image_hash:
             creative_data['image_hash'] = image_hash
         else:
